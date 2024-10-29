@@ -289,7 +289,7 @@ namespace PlayEveryWare.EpicOnlineServices.Editor.Build
             File.WriteAllText(filepath, newContents);
         }
 
-        private static void InstallEOSDependentLibrary()
+         private static void InstallEOSDependentLibrary()
         {
             string packagedPathname = GetPlatformSpecificAssetsPath("EOS/Android/");
 
@@ -306,40 +306,206 @@ namespace PlayEveryWare.EpicOnlineServices.Editor.Build
                 };
                 InstallFiles(filenames, packagedPathname, assetsPathname);
 
+#if UNITY_6000_0_OR_NEWER
+                OverwriteForUnity6(Path.Combine(assetsPathname, buildGradlePath));
+                // ModifyAndroidManifest(Path.Combine(assetsPathname, "eos_dependencies.androidlib/AndroidManifest.xml"));
+#endif
                 WriteConfigMacros(Path.Combine(assetsPathname, buildGradlePath));
+            }
+        }
+        
+        private static void OverwriteForUnity6(string gradlePath)
+        {
+            if (!File.Exists(gradlePath))
+            {
+                Debug.LogError($"Gradle file not found at path: {gradlePath}");
+                return;
+            }
+
+            string content = File.ReadAllText(gradlePath);
+
+            // Find the　insert section
+            var buildscriptPattern = "jcenter()";
+            var matchbuildscript = Regex.Match(content, buildscriptPattern);
+            if (!matchbuildscript.Success)
+            {
+                Debug.LogError("Could not find 'jcenter()' section in gradle file.");
+                return;
+            }
+
+            var gradlePattern = @"classpath ""com.android.tools.build:([^""]+)""";
+            var matchgradle = Regex.Match(content, gradlePattern);
+            if (!matchgradle.Success)
+            {
+                Debug.LogError("Could not find 'com.android.tools.build:' section in gradle file.");
+                return;
+            }
+
+            var androidPattern = @"android\s*\{";
+            var matchNamespace = Regex.Match(content, androidPattern);
+            if (!matchNamespace.Success)
+            {
+                Debug.LogError("Could not find 'android {' section in gradle file.");
+                return;
+            }
+            
+            var configPattern = @"defaultConfig\s*\{[^}]*\}";
+            var matchConfig = Regex.Match(content, configPattern, RegexOptions.Singleline);
+            if (!matchConfig.Success)
+            {
+                Debug.LogError("Could not find 'defaultConfig' section in gradle file.");
+                return;
+            }
+
+            var browserPattern = @"implementation\s+'androidx\.browser:browser:1\.4\.0'";
+            var matchbrowser = Regex.Match(content, browserPattern);
+            if (!matchbrowser.Success)
+            {
+                Debug.LogError("Could not find 'browser...' section in gradle file.");
+                return;
+            }
+
+            var appcompatPattern = @"implementation\s+'androidx\.appcompat:appcompat:1\.5\.1'";
+            var matchappcompat = Regex.Match(content, appcompatPattern);
+            if (!matchappcompat.Success)
+            {
+                Debug.LogError("Could not find 'appcompat...' section in gradle file.");
+                return;
+            }
+
+            // Insert text from back to avoid affect on the Index.
+            var updatedContent = new System.Text.StringBuilder(content);
+            // library
+            var insertPoint = matchbrowser.Index + matchbrowser.Length;
+            string insertedText = @"        implementation 'androidx.webkit:webkit:1.7.0'";
+            updatedContent.Insert(insertPoint, $"\n{insertedText}\n");
+
+            //option and configurations
+            insertPoint = matchConfig.Index + matchConfig.Length;
+            insertedText = @"
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    
+}";
+//     lint {
+//         abortOnError false
+//     }
+// }
+
+// configurations.all {
+//     resolutionStrategy {
+//         force 'androidx.appcompat:appcompat:1.6.1'
+//         force 'androidx.core:core:1.9.0'
+//     }";
+//             updatedContent.Insert(insertPoint, insertedText);
+
+            // namespace
+            insertPoint = matchNamespace.Index + matchNamespace.Length;
+            insertedText = @"    namespace ""com.pew.eos_dependencies""";
+            updatedContent.Insert(insertPoint, $"\n{insertedText}\n");
+
+            // appcompat ver
+            string newAppcompatVersion = "1.6.1";
+            string updatedAppcompatLine = $"implementation \'androidx.appcompat:appcompat:{newAppcompatVersion}\'";
+            updatedContent.Replace(matchappcompat.Value, updatedAppcompatLine);
+
+            // gradle ver
+            string newGradleVersion = "8.3.0";
+            string updatedGradleLine = $"classpath \"com.android.tools.build:gradle:{newGradleVersion}\"";
+            updatedContent.Replace(matchgradle.Value, updatedGradleLine);
+            
+            // build script
+            updatedContent = updatedContent.Replace("jcenter()", "mavenCentral()");
+
+
+            // Write back to file
+            try
+            {
+                File.WriteAllText(gradlePath, updatedContent.ToString());
+                Debug.Log("Successfully update build.gradle for Unity6000.");
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"Failed to write updated gradle file: {e.Message}");
+            }
+        }
+     
+        private static void ModifyAndroidManifest(string manifestPath)
+        {
+            if (!File.Exists(manifestPath))
+            {
+                Debug.LogError($"AndroidManifest file not found at path: {manifestPath}");
+                return;
+            }
+
+            string content = File.ReadAllText(manifestPath);
+
+            // if (!content.Contains("xmlns:tools="))
+            // {
+            //     content = content.Replace("<manifest ", "<manifest xmlns:tools=\"http://schemas.android.com/tools\" ");
+            // }android\s*
+
+            var applicationPattern = @"<application[^>]*"; //android:theme=""@style/Theme\.AppCompat\.Light\.NoActionBar\.FullScreen"""; //""[^>]*>
+            var matchApplication = Regex.Match(content, applicationPattern);
+            if (!matchApplication.Success)
+            {
+                Debug.LogError("Could not find application tag in manifest file.");
+                return;
+            }
+
+            var updatedContent = new System.Text.StringBuilder(content);
+            var insertPoint = matchApplication.Index + matchApplication.Length;
+            string insertedText = @"
+        android:label=""com.pew.eos_dependencies""";
+
+
+        // <property
+        //     android:name=""android.adservices.AD_SERVICES_CONFIG""
+        //     android:resource=""@xml/gma_ad_services_config""
+        //     tools:replace=""android:resource"" />";
+
+            updatedContent.Insert(insertPoint, insertedText);
+
+            try
+            {
+                File.WriteAllText(manifestPath, updatedContent.ToString());
+                Debug.Log("Successfully modified AndroidManifest for Unity6000.");
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"Failed to write updated AndroidManifest file: {e.Message}");
             }
         }
 
         private static void ConfigureGradleTemplateProperties()
         {
-            // Unity has a fixed location for the gradleTemplate.properties file. (as of 2021)
-            string gradleTemplatePathname =
-                Path.Combine(Application.dataPath, "Plugins", "Android", "gradleTemplate.properties");
+            string gradleTemplatePathname = Path.Combine(Application.dataPath, "Plugins", "Android", "gradleTemplate.properties");
 
-            // If the custom gradle template properties option is disabled, delete gradleTemplate.properties.DISABLED
             File.Delete(gradleTemplatePathname + ".DISABLED");
 
-            // Then create a copy of gradleTemplate.properties in the target folder
-            // Once gradleTemplate.properties file exists, the custom gradle template properties option is automatically enabled 
             if (File.Exists(gradleTemplatePathname))
             {
                 if (!DoesGradlePropertiesContainSetting(gradleTemplatePathname, "android.useAndroidX=true"))
                 {
                     ReplaceOrSetGradleProperty(gradleTemplatePathname, "android.useAndroidX", "true");
                 }
+#if !UNITY_6000_0_OR_NEWER
+                ReplaceOrSetGradleProperty(gradleTemplatePathname, "android.defaults.buildfeatures.buildconfig", "true");
+#endif
+                ReplaceOrSetGradleProperty(gradleTemplatePathname, "android.nonTransitiveRClass", "false");
+                ReplaceOrSetGradleProperty(gradleTemplatePathname, "android.nonFinalResIds", "false");
             }
             else
             {
-                // Use one we have bundled
-                string bundledGradleTemplatePathname = Path.Combine(GetPlatformSpecificAssetsPath("EOS/Android/"),
-                    "gradleTemplate.properties");
+                string bundledGradleTemplatePathname = Path.Combine(GetPlatformSpecificAssetsPath("EOS/Android/"), "gradleTemplate.properties");
                 File.Copy(bundledGradleTemplatePathname, gradleTemplatePathname);
             }
 
-#if UNITY_2022_2_OR_NEWER
+        #if UNITY_2022_2_OR_NEWER
             DisableGradleProperty(gradleTemplatePathname, "android.enableR8");
-#endif
-
+        #endif
         }
 
         private static void ConfigureEOSDependentLibrary()
